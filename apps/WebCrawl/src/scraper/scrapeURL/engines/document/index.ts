@@ -1,0 +1,128 @@
+import { Meta } from "../..";
+import { EngineScrapeResult } from "..";
+import { fetchFileToBuffer } from "../utils/downloadFile";
+import { DocumentConverter, DocumentType } from "@mendable/firecrawl-rs";
+import type { Response } from "undici";
+import { DocumentAntibotError } from "../../error";
+
+const converter = new DocumentConverter();
+
+function getDocumentTypeFromUrl(url: string): DocumentType {
+  const urlLower = url.toLowerCase();
+
+  // Check for extensions at the end or in the middle (e.g., file.xlsx/hash)
+  if (urlLower.endsWith(".docx") || urlLower.includes(".docx/"))
+    return DocumentType.Docx;
+  if (urlLower.endsWith(".odt") || urlLower.includes(".odt/"))
+    return DocumentType.Odt;
+  if (urlLower.endsWith(".rtf") || urlLower.includes(".rtf/"))
+    return DocumentType.Rtf;
+  if (
+    urlLower.endsWith(".xlsx") ||
+    urlLower.endsWith(".xls") ||
+    urlLower.includes(".xlsx/") ||
+    urlLower.includes(".xls/")
+  )
+    return DocumentType.Xlsx;
+
+  return DocumentType.Docx; // hope for the best
+}
+
+function getDocumentTypeFromContentType(
+  contentType: string | null,
+): DocumentType | null {
+  if (!contentType) return null;
+
+  const ct = contentType.toLowerCase();
+
+  if (
+    ct.includes(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ) ||
+    ct.includes("application/msword")
+  ) {
+    return DocumentType.Docx;
+  }
+
+  if (ct.includes("application/vnd.oasis.opendocument.text")) {
+    return DocumentType.Odt;
+  }
+
+  if (ct.includes("application/rtf") || ct.includes("text/rtf")) {
+    return DocumentType.Rtf;
+  }
+
+  if (
+    ct.includes(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ) ||
+    ct.includes("application/vnd.ms-excel")
+  ) {
+    return DocumentType.Xlsx;
+  }
+
+  return null;
+}
+
+function isValidDocumentContentType(contentType: string | null): boolean {
+  if (!contentType) return false;
+
+  const ct = contentType.toLowerCase();
+  const validTypes = [
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "application/msword",
+    "application/rtf",
+    "text/rtf",
+    "application/vnd.oasis.opendocument.text",
+  ];
+
+  return validTypes.some(type => ct.includes(type));
+}
+
+export async function scrapeDocument(meta: Meta): Promise<EngineScrapeResult> {
+  let response: Response;
+  let buffer: Buffer;
+  let proxyUsed: "basic" | "stealth" = "basic";
+  try {
+    const result = await fetchFileToBuffer(
+      meta.rewrittenUrl ?? meta.url,
+      meta.options.skipTlsVerification,
+      {
+        headers: meta.options.headers,
+        signal: meta.abort.asSignal(),
+      },
+    );
+    response = result.response;
+    buffer = result.buffer;
+
+    const ct = response.headers.get("Content-Type");
+    if (ct && !isValidDocumentContentType(ct)) {
+      throw new DocumentAntibotError();
+    }
+
+    const documentType =
+      getDocumentTypeFromContentType(response.headers.get("content-type")) ??
+      getDocumentTypeFromUrl(response.url);
+
+    const html = await converter.convertBufferToHtml(
+      new Uint8Array(buffer),
+      documentType,
+    );
+
+    return {
+      url: response.url,
+      statusCode: response.status,
+      html,
+      contentType: response.headers.get("content-type") ?? undefined,
+      proxyUsed,
+    };
+  } finally {
+    // No temp file to clean up in the direct-fetch flow.
+  }
+}
+
+export function documentMaxReasonableTime(meta: Meta): number {
+  return 15000;
+}
