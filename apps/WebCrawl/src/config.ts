@@ -18,6 +18,7 @@ const configSchema = z.object({
 
   EXPOSE_ERROR_STACK: z.coerce.boolean().default(false),
   EXPOSE_ERROR_DETAILS: z.coerce.boolean().default(false),
+  FIRECRAWL_DEBUG_FILTER_LINKS: z.coerce.boolean().default(false),
 });
 
 export const config = configSchema.parse(process.env);

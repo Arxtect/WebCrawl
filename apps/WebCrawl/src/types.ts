@@ -54,6 +54,7 @@ export type ScrapeOptions = z.infer<typeof scrapeOptions>;
 
 export type TeamFlags = {
   checkRobotsOnScrape?: boolean;
+  unblockedDomains?: string[];
 } | null;
 
 export type Document = {
@@ -75,6 +76,22 @@ export type Document = {
   };
   warning?: string;
 };
+
+export const crawlOptions = z.strictObject({
+  limit: z.number().int().positive().max(10000).default(100),
+  maxDepth: z.number().int().nonnegative().max(20).default(2),
+  includes: z.array(z.string()).optional(),
+  excludes: z.array(z.string()).optional(),
+  allowBackwardCrawling: z.boolean().default(false),
+  allowExternalContentLinks: z.boolean().default(false),
+  allowSubdomains: z.boolean().default(false),
+  ignoreRobotsTxt: z.boolean().default(false),
+  regexOnFullURL: z.boolean().default(false),
+  headers: z.record(z.string(), z.string()).optional(),
+  scrapeOptions: scrapeOptions.optional(),
+});
+
+export type CrawlOptions = z.infer<typeof crawlOptions>;
 
 export function shouldParsePDF(parsers?: Parsers): boolean {
   if (!parsers) return true;
