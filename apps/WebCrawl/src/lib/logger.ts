@@ -28,6 +28,8 @@ export const logger = winston.createLogger({
   level: config.LOGGING_LEVEL?.toLowerCase() ?? 'info',
   transports: [
     new winston.transports.Console({
+      stderrLevels: [],
+      consoleWarnLevels: [],
       format: winston.format.combine(
           winston.format.timestamp({format: 'YYYY-MM-DD HH:mm:ss'}),
           winston.format.metadata({

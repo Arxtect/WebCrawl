@@ -1,6 +1,7 @@
-import robotsParser, { Robot } from "robots-parser";
-import { Logger } from "winston";
-import { getSecureDispatcher } from "../scraper/scrapeURL/engines/utils/safeFetch";
+import robotsParser, {Robot} from 'robots-parser';
+import {Logger} from 'winston';
+
+import {getSecureDispatcher} from '../scraper/scrapeURL/engines/utils/safeFetch';
 
 interface RobotsTxtChecker {
   robotsTxtUrl: string;
@@ -9,27 +10,24 @@ interface RobotsTxtChecker {
 }
 
 export async function fetchRobotsTxt(
-  {
-    url,
-    zeroDataRetention,
-  }: {
-    url: string;
-    zeroDataRetention: boolean;
-  },
-  scrapeId: string,
-  logger: Logger,
-  abort?: AbortSignal,
-): Promise<{ content: string; url: string }> {
+    {
+      url,
+      zeroDataRetention,
+    }: {url: string; zeroDataRetention: boolean;},
+    scrapeId: string,
+    logger: Logger,
+    abort?: AbortSignal,
+    ): Promise<{content: string; url: string}> {
   const urlObj = new URL(url);
   const robotsTxtUrl = `${urlObj.protocol}//${urlObj.host}/robots.txt`;
   try {
     const response = await fetch(robotsTxtUrl, {
       dispatcher: getSecureDispatcher(false),
       signal: abort,
-    });
+    } as any);
     if (response.status === 404) {
-      logger.warn("Robots.txt not found", { robotsTxtUrl });
-      return { content: "", url: robotsTxtUrl };
+      logger.warn('Robots.txt not found', {robotsTxtUrl});
+      return {content: '', url: robotsTxtUrl};
     }
     const content = await response.text();
     return {
@@ -37,20 +35,20 @@ export async function fetchRobotsTxt(
       url: response.url || robotsTxtUrl,
     };
   } catch (error) {
-    logger.warn("Failed to fetch robots.txt, allowing scrape", {
+    logger.warn('Failed to fetch robots.txt, allowing scrape', {
       error,
       robotsTxtUrl,
       scrapeId,
       zeroDataRetention,
     });
-    return { content: "", url: robotsTxtUrl };
+    return {content: '', url: robotsTxtUrl};
   }
 }
 
 export function createRobotsChecker(
-  url: string,
-  robotsTxt: string,
-): RobotsTxtChecker {
+    url: string,
+    robotsTxt: string,
+    ): RobotsTxtChecker {
   const urlObj = new URL(url);
   const robotsTxtUrl = `${urlObj.protocol}//${urlObj.host}/robots.txt`;
   const robots = robotsParser(robotsTxtUrl, robotsTxt);
@@ -62,10 +60,10 @@ export function createRobotsChecker(
 }
 
 export function isUrlAllowedByRobots(
-  url: string,
-  robots: Robot | null,
-  userAgents: string[] = ["FireCrawlAgent", "FirecrawlAgent"],
-): boolean {
+    url: string,
+    robots: Robot|null,
+    userAgents: string[] = ['FireCrawlAgent', 'FirecrawlAgent'],
+    ): boolean {
   if (!robots) return true;
 
   for (const userAgent of userAgents) {
@@ -82,8 +80,8 @@ export function isUrlAllowedByRobots(
 
     // Also check with trailing slash if URL doesn't have one
     // This catches cases like "Disallow: /path/" when user requests "/path"
-    if (isAllowed && !url.endsWith("/")) {
-      const urlWithSlash = url + "/";
+    if (isAllowed && !url.endsWith('/')) {
+      const urlWithSlash = url + '/';
       let isAllowedWithSlash = robots.isAllowed(urlWithSlash, userAgent);
 
       if (isAllowedWithSlash == null) {

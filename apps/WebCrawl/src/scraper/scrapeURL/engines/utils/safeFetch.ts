@@ -1,8 +1,6 @@
-import {cookie} from 'http-cookie-agent/undici';
 import IPAddr from 'ipaddr.js';
 import type {Socket} from 'net';
 import type {TLSSocket} from 'tls';
-import {CookieJar} from 'tough-cookie';
 import * as undici from 'undici';
 
 import {config} from '../../../../config';
@@ -23,34 +21,35 @@ export function isIPPrivate(address: string): boolean {
 function createBaseAgent(skipTlsVerification: boolean) {
   const agentOpts: undici.Agent.Options = {};
 
-  return config.PROXY_SERVER ?
-      new undici.ProxyAgent({
-        uri: config.PROXY_SERVER.includes('://') ?
-            config.PROXY_SERVER :
-            'http://' + config.PROXY_SERVER,
-        token: config.PROXY_USERNAME ?
-            `Basic ${
-                Buffer
-                    .from(
-                        config.PROXY_USERNAME + ':' +
-                        (config.PROXY_PASSWORD ?? ''))
-                    .toString('base64')}` :
-            undefined,
-        requestTls: {
-          rejectUnauthorized:
-              !skipTlsVerification,  // Only bypass SSL verification if
-                                     // explicitly requested
-        },
-        ...agentOpts,
-      }) :
-      new undici.Agent({
-        connect: {
-          rejectUnauthorized:
-              !skipTlsVerification,  // Only bypass SSL verification if
-                                     // explicitly requested
-        },
-        ...agentOpts,
-      });
+  if (config.PROXY_SERVER) {
+    return new undici.ProxyAgent({
+      uri: config.PROXY_SERVER.includes('://') ?
+          config.PROXY_SERVER :
+          'http://' + config.PROXY_SERVER,
+      token: config.PROXY_USERNAME ?
+          `Basic ${
+              Buffer
+                  .from(
+                      config.PROXY_USERNAME + ':' +
+                      (config.PROXY_PASSWORD ?? ''))
+                  .toString('base64')}` :
+          undefined,
+      requestTls: {
+        rejectUnauthorized:
+            !skipTlsVerification,  // Only bypass SSL verification if
+                                   // explicitly requested
+      },
+      ...agentOpts,
+    });
+  }
+
+  return new undici.Agent({
+    connect: {
+      rejectUnauthorized:
+          !skipTlsVerification,  // Only bypass SSL verification if explicitly requested
+    },
+    ...agentOpts,
+  });
 }
 
 function attachSecurityCheck(agent: undici.Dispatcher) {
@@ -68,17 +67,12 @@ function attachSecurityCheck(agent: undici.Dispatcher) {
   });
 }
 
-// Dispatcher WITH cookie handling (for scraping - needs cookies for auth flows)
 function makeSecureDispatcher(skipTlsVerification: boolean) {
-  const baseAgent = createBaseAgent(skipTlsVerification);
-  const cookieJar = new CookieJar();
-  const agent = baseAgent.compose(cookie({jar: cookieJar}));
+  const agent = createBaseAgent(skipTlsVerification);
   attachSecurityCheck(agent);
   return agent;
 }
 
-// Dispatcher WITHOUT cookie handling (for webhooks - avoids empty cookie header
-// bug)
 function makeSecureDispatcherNoCookies(skipTlsVerification: boolean) {
   const agent = createBaseAgent(skipTlsVerification);
   attachSecurityCheck(agent);
@@ -95,7 +89,6 @@ export const getSecureDispatcher = (skipTlsVerification: boolean = false) =>
     skipTlsVerification ? secureDispatcherSkipTlsVerification :
                           secureDispatcher;
 
-// Use this for webhook delivery to avoid sending empty cookie headers
 export const getSecureDispatcherNoCookies = (
     skipTlsVerification: boolean = false,
     ) => skipTlsVerification ? secureDispatcherNoCookiesSkipTlsVerification :
