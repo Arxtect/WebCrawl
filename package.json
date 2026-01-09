@@ -8,8 +8,9 @@
   "scripts": {
     "dev:webcrawl": "bun run --cwd apps/WebCrawl dev",
     "dev:playwright": "npm --prefix apps/playwright-service-ts run dev",
+    "dev:lightpanda": "bun run --cwd apps/lightpanda-test server",
     "dev:demo": "bun --prefix apps/webcrawl-demo run dev",
-    "dev:all": "concurrently -n webcrawl,playwright,demo -c cyan,magenta,green \"bun run --cwd apps/WebCrawl dev\" \"npm --prefix apps/playwright-service-ts run dev\" \"npm --prefix apps/webcrawl-demo run dev\""
+    "dev:all": "node scripts/dev-all.cjs"
   },
   "devDependencies": {
     "concurrently": "^9.0.1"

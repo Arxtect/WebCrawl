@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { Browser, Page } from 'puppeteer-core';
+import { chromium } from 'playwright';
 import { getRealisticUserAgent, getRandomViewport } from './userAgent';
 
 // Apply stealth plugin
@@ -49,8 +50,14 @@ export async function initializeStealthBrowser(options: StealthBrowserOptions = 
     ignoreHTTPSErrors: true,
   };
 
-  if (options.executablePath) {
-    launchOptions.executablePath = options.executablePath;
+  const resolvedExecutablePath =
+    options.executablePath ||
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+    chromium.executablePath();
+
+  if (resolvedExecutablePath) {
+    launchOptions.executablePath = resolvedExecutablePath;
   }
 
   if (options.proxy) {

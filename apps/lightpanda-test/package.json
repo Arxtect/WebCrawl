@@ -1,0 +1,26 @@
+{
+  "name": "lightpanda-test",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run index.ts",
+    "server": "bun run server.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/jsdom": "^21.1.7"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "@types/turndown": "^5.0.6",
+    "jsdom": "^27.4.0",
+    "puppeteer-core": "^24.34.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "turndown": "^7.2.2"
+  }
+}
