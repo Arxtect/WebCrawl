@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@joplin/turndown-plugin-gfm": "^1.0.64",
-    "@mendable/firecrawl-rs": "file:./native",
+    "@mendable/firecrawl-rs": "file:../../packages/firecrawl-rs",
     "axios": "^1.9.0",
     "cacheable-lookup": "^7.0.0",
     "cheerio": "^1.1.2",
@@ -15,7 +15,6 @@
     "elysia": "latest",
     "escape-html": "^1.0.3",
     "ipaddr.js": "^2.2.0",
-    "koffi": "^2.10.2",
     "pdf-parse": "^1.1.1",
     "robots-parser": "^3.0.1",
     "turndown": "^7.1.2",

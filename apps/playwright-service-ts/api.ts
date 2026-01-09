@@ -4,6 +4,13 @@ import { chromium, Browser, BrowserContext, Route, Request as PlaywrightRequest,
 import dotenv from 'dotenv';
 import UserAgent from 'user-agents';
 import { getError } from './helpers/get_error';
+import { 
+  initializeStealthBrowser, 
+  closeStealthBrowser, 
+  scrapeWithStealth,
+  getStealthBrowser 
+} from './helpers/stealth';
+import { getRealisticUserAgent, getRealisticHeaders, UserAgentRotator } from './helpers/userAgent';
 
 dotenv.config();
 
@@ -18,6 +25,11 @@ const MAX_CONCURRENT_PAGES = Math.max(1, Number.parseInt(process.env.MAX_CONCURR
 const PROXY_SERVER = process.env.PROXY_SERVER || null;
 const PROXY_USERNAME = process.env.PROXY_USERNAME || null;
 const PROXY_PASSWORD = process.env.PROXY_PASSWORD || null;
+const USE_STEALTH = (process.env.USE_STEALTH || 'True').toUpperCase() === 'TRUE';
+
+// User agent rotator for enhanced anti-detection
+const userAgentRotator = new UserAgentRotator('desktop', 5);
+
 class Semaphore {
   private permits: number;
   private queue: (() => void)[] = [];
@@ -100,8 +112,9 @@ const initializeBrowser = async () => {
   });
 };
 
-const createContext = async (skipTlsVerification: boolean = false) => {
-  const userAgent = new UserAgent().toString();
+const createContext = async (skipTlsVerification: boolean = false, useEnhancedStealth: boolean = false) => {
+  // Use realistic user agent from our custom module for better anti-detection
+  const userAgent = useEnhancedStealth ? userAgentRotator.getNext() : new UserAgent().toString();
   const viewport = { width: 1280, height: 800 };
 
   const contextOptions: any = {
@@ -109,6 +122,11 @@ const createContext = async (skipTlsVerification: boolean = false) => {
     viewport,
     ignoreHTTPSErrors: skipTlsVerification,
   };
+
+  // Add extra headers for stealth mode
+  if (useEnhancedStealth) {
+    contextOptions.extraHTTPHeaders = getRealisticHeaders(userAgent);
+  }
 
   if (PROXY_SERVER && PROXY_USERNAME && PROXY_PASSWORD) {
     contextOptions.proxy = {
@@ -243,7 +261,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
     console.warn('⚠️ WARNING: No proxy server provided. Your IP address may be blocked.');
   }
 
-  if (!browser) {
+  if (!browser && !USE_STEALTH) {
     await initializeBrowser();
   }
 
@@ -251,20 +269,42 @@ app.post('/scrape', async (req: Request, res: Response) => {
   
   let requestContext: BrowserContext | null = null;
   let page: Page | null = null;
+  let stealthBrowser = null;
 
   try {
-    requestContext = await createContext(skip_tls_verification);
-    page = await requestContext.newPage();
+    let result;
+    if (USE_STEALTH) {
+      stealthBrowser = getStealthBrowser();
+      if (!stealthBrowser) {
+        const proxyConfig = PROXY_SERVER ? {
+          server: PROXY_SERVER,
+          username: PROXY_USERNAME || undefined,
+          password: PROXY_PASSWORD || undefined,
+        } : undefined;
+        stealthBrowser = await initializeStealthBrowser({ proxy: proxyConfig });
+      }
+      result = await scrapeWithStealth(stealthBrowser!, url, {
+        waitAfterLoad: wait_after_load,
+        timeout,
+        headers,
+        checkSelector: check_selector,
+        skipTlsVerification: skip_tls_verification,
+      });
+    } else {
+      requestContext = await createContext(skip_tls_verification);
+      page = await requestContext.newPage();
 
-    if (headers) {
-      await page.setExtraHTTPHeaders(headers);
+      if (headers) {
+        await page.setExtraHTTPHeaders(headers);
+      }
+
+      result = await scrapePage(page, url, 'load', wait_after_load, timeout, check_selector);
     }
-
-    const result = await scrapePage(page, url, 'load', wait_after_load, timeout, check_selector);
+    
     const pageError = result.status !== 200 ? getError(result.status) : undefined;
 
     if (!pageError) {
-      console.log(`✅ Scrape successful!`);
+      console.log(`✅ Scrape successful! (${USE_STEALTH ? 'Stealth' : 'Standard'})`);
     } else {
       console.log(`🚨 Scrape failed with status code: ${result.status} ${pageError}`);
     }
@@ -286,17 +326,194 @@ app.post('/scrape', async (req: Request, res: Response) => {
   }
 });
 
-app.listen(port, () => {
-  initializeBrowser().then(() => {
-    console.log(`Server is running on port ${port}`);
-  });
+// Stealth scraping endpoint using puppeteer-extra with stealth plugin
+app.post('/scrape-stealth', async (req: Request, res: Response) => {
+  const { url, wait_after_load = 0, timeout = 15000, headers, check_selector, skip_tls_verification = false }: UrlModel = req.body;
+
+  console.log(`================= Stealth Scrape Request =================`);
+  console.log(`URL: ${url}`);
+  console.log(`Wait After Load: ${wait_after_load}`);
+  console.log(`Timeout: ${timeout}`);
+  console.log(`Headers: ${headers ? JSON.stringify(headers) : 'None'}`);
+  console.log(`Check Selector: ${check_selector ? check_selector : 'None'}`);
+  console.log(`Skip TLS Verification: ${skip_tls_verification}`);
+  console.log(`===========================================================`);
+
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required' });
+  }
+
+  if (!isValidUrl(url)) {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+
+  await pageSemaphore.acquire();
+
+  try {
+    // Initialize stealth browser if not already done
+    let stealthBrowser = getStealthBrowser();
+    if (!stealthBrowser) {
+      const proxyConfig = PROXY_SERVER ? {
+        server: PROXY_SERVER,
+        username: PROXY_USERNAME || undefined,
+        password: PROXY_PASSWORD || undefined,
+      } : undefined;
+      
+      stealthBrowser = await initializeStealthBrowser({ proxy: proxyConfig });
+    }
+
+    const result = await scrapeWithStealth(stealthBrowser!, url, {
+      waitAfterLoad: wait_after_load,
+      timeout,
+      headers,
+      checkSelector: check_selector,
+      skipTlsVerification: skip_tls_verification,
+    });
+
+    const pageError = result.status !== 200 ? getError(result.status) : undefined;
+
+    if (!pageError) {
+      console.log(`✅ Stealth scrape successful!`);
+    } else {
+      console.log(`🚨 Stealth scrape failed with status code: ${result.status} ${pageError}`);
+    }
+
+    res.json({
+      content: result.content,
+      pageStatusCode: result.status,
+      contentType: result.contentType,
+      ...(pageError && { pageError })
+    });
+
+  } catch (error) {
+    console.error('Stealth scrape error:', error);
+    res.status(500).json({ error: 'An error occurred while fetching the page with stealth mode.' });
+  } finally {
+    pageSemaphore.release();
+  }
+});
+
+// Enhanced scrape endpoint with optional stealth mode
+app.post('/scrape-enhanced', async (req: Request, res: Response) => {
+  const { 
+    url, 
+    wait_after_load = 0, 
+    timeout = 15000, 
+    headers, 
+    check_selector, 
+    skip_tls_verification = false,
+    use_stealth = USE_STEALTH 
+  }: UrlModel & { use_stealth?: boolean } = req.body;
+
+  console.log(`================= Enhanced Scrape Request =================`);
+  console.log(`URL: ${url}`);
+  console.log(`Wait After Load: ${wait_after_load}`);
+  console.log(`Timeout: ${timeout}`);
+  console.log(`Headers: ${headers ? JSON.stringify(headers) : 'None'}`);
+  console.log(`Check Selector: ${check_selector ? check_selector : 'None'}`);
+  console.log(`Skip TLS Verification: ${skip_tls_verification}`);
+  console.log(`Use Stealth: ${use_stealth}`);
+  console.log(`============================================================`);
+
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required' });
+  }
+
+  if (!isValidUrl(url)) {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+
+  await pageSemaphore.acquire();
+
+  try {
+    if (use_stealth) {
+      // Use puppeteer-extra with stealth plugin
+      let stealthBrowser = getStealthBrowser();
+      if (!stealthBrowser) {
+        const proxyConfig = PROXY_SERVER ? {
+          server: PROXY_SERVER,
+          username: PROXY_USERNAME || undefined,
+          password: PROXY_PASSWORD || undefined,
+        } : undefined;
+        
+        stealthBrowser = await initializeStealthBrowser({ proxy: proxyConfig });
+      }
+
+      const result = await scrapeWithStealth(stealthBrowser!, url, {
+        waitAfterLoad: wait_after_load,
+        timeout,
+        headers,
+        checkSelector: check_selector,
+        skipTlsVerification: skip_tls_verification,
+      });
+
+      const pageError = result.status !== 200 ? getError(result.status) : undefined;
+
+      res.json({
+        content: result.content,
+        pageStatusCode: result.status,
+        contentType: result.contentType,
+        engine: 'stealth',
+        ...(pageError && { pageError })
+      });
+    } else {
+      // Use Playwright with enhanced stealth context
+      if (!browser) {
+        await initializeBrowser();
+      }
+
+      const requestContext = await createContext(skip_tls_verification, true);
+      const page = await requestContext.newPage();
+
+      try {
+        if (headers) {
+          await page.setExtraHTTPHeaders(headers);
+        }
+
+        const result = await scrapePage(page, url, 'load', wait_after_load, timeout, check_selector);
+        const pageError = result.status !== 200 ? getError(result.status) : undefined;
+
+        res.json({
+          content: result.content,
+          pageStatusCode: result.status,
+          contentType: result.contentType,
+          engine: 'playwright-enhanced',
+          ...(pageError && { pageError })
+        });
+      } finally {
+        await page.close();
+        await requestContext.close();
+      }
+    }
+  } catch (error) {
+    console.error('Enhanced scrape error:', error);
+    res.status(500).json({ error: 'An error occurred while fetching the page.' });
+  } finally {
+    pageSemaphore.release();
+  }
+});
+
+app.listen(port, async () => {
+  if (USE_STEALTH) {
+    const proxyConfig = PROXY_SERVER ? {
+      server: PROXY_SERVER,
+      username: PROXY_USERNAME || undefined,
+      password: PROXY_PASSWORD || undefined,
+    } : undefined;
+    await initializeStealthBrowser({ proxy: proxyConfig });
+  } else {
+    await initializeBrowser();
+  }
+  
+  console.log(`Server is running on port ${port}`);
+  console.log(`Stealth mode default: ${USE_STEALTH ? 'enabled' : 'disabled'}`);
 });
 
 if (require.main === module) {
-  process.on('SIGINT', () => {
-    shutdownBrowser().then(() => {
-      console.log('Browser closed');
-      process.exit(0);
-    });
+  process.on('SIGINT', async () => {
+    await shutdownBrowser();
+    await closeStealthBrowser();
+    console.log('Browsers closed');
+    process.exit(0);
   });
 }

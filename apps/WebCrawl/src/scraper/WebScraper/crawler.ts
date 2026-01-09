@@ -2,15 +2,9 @@ import { config } from "../../config";
 import { load } from "cheerio"; // rustified
 import { URL } from "url";
 import { getLinksFromSitemap } from "./sitemap";
-import robotsParser, { Robot } from "robots-parser";
 import { getURLDepth } from "./utils/maxDepthUtils";
 import { logger as _logger } from "../../lib/logger";
 import { extractLinks } from "@mendable/firecrawl-rs";
-import {
-  fetchRobotsTxt,
-  createRobotsChecker,
-  isUrlAllowedByRobots,
-} from "../../lib/robots-txt";
 import { ScrapeJobTimeoutError } from "../../lib/error";
 import { filterLinks, filterUrl } from "@mendable/firecrawl-rs";
 
@@ -87,14 +81,9 @@ export class WebCrawler {
   private excludes: string[];
   private maxCrawledDepth: number;
   private limit: number;
-  private robotsTxt: string;
-  private robotsTxtUrl: string;
-  public robots: Robot;
-  private robotsCrawlDelay: number | null = null;
   private allowBackwardCrawling: boolean;
   private allowExternalContentLinks: boolean;
   private allowSubdomains: boolean;
-  private ignoreRobotsTxt: boolean;
   private regexOnFullURL: boolean;
   private logger: typeof _logger;
   private sitemapsHit: Set<string> = new Set();
@@ -114,7 +103,6 @@ export class WebCrawler {
     allowBackwardCrawling = false,
     allowExternalContentLinks = false,
     allowSubdomains = false,
-    ignoreRobotsTxt = false,
     regexOnFullURL = false,
     maxDiscoveryDepth,
     currentDiscoveryDepth,
@@ -130,7 +118,6 @@ export class WebCrawler {
     allowBackwardCrawling?: boolean;
     allowExternalContentLinks?: boolean;
     allowSubdomains?: boolean;
-    ignoreRobotsTxt?: boolean;
     regexOnFullURL?: boolean;
     maxDiscoveryDepth?: number;
     currentDiscoveryDepth?: number;
@@ -143,13 +130,9 @@ export class WebCrawler {
     this.excludes = Array.isArray(excludes) ? excludes : [];
     this.limit = limit;
     this.maxCrawledDepth = maxCrawledDepth;
-    this.robotsTxt = "";
-    this.robotsTxtUrl = `${this.baseUrl}${this.baseUrl.endsWith("/") ? "" : "/"}robots.txt`;
-    this.robots = robotsParser(this.robotsTxtUrl, this.robotsTxt);
     this.allowBackwardCrawling = allowBackwardCrawling ?? false;
     this.allowExternalContentLinks = allowExternalContentLinks ?? false;
     this.allowSubdomains = allowSubdomains ?? false;
-    this.ignoreRobotsTxt = ignoreRobotsTxt ?? false;
     this.regexOnFullURL = regexOnFullURL ?? false;
     this.logger = _logger.child({
       crawlId: this.jobId,
@@ -162,7 +145,6 @@ export class WebCrawler {
 
   public setBaseUrl(newBase: string): void {
     this.baseUrl = newBase;
-    this.robotsTxtUrl = `${this.baseUrl}${this.baseUrl.endsWith("/") ? "" : "/"}robots.txt`;
   }
 
   public setCurrentDiscoveryDepth(depth: number): void {
@@ -205,8 +187,8 @@ export class WebCrawler {
         excludes: this.excludes,
         includes: this.includes,
         allowBackwardCrawling: this.allowBackwardCrawling,
-        ignoreRobotsTxt: this.ignoreRobotsTxt || skipRobots,
-        robotsTxt: this.robotsTxt,
+        ignoreRobotsTxt: true,
+        robotsTxt: "",
         allowExternalContentLinks: this.allowExternalContentLinks,
         allowSubdomains: this.allowSubdomains,
       });
@@ -335,12 +317,7 @@ export class WebCrawler {
           }
         }
 
-        const isAllowed =
-          this.ignoreRobotsTxt || skipRobots
-            ? true
-            : ((this.robots.isAllowed(link, "FireCrawlAgent") ||
-                this.robots.isAllowed(link, "FirecrawlAgent")) ??
-              true);
+        const isAllowed = true;
         // Check if the link is disallowed by robots.txt
         if (!isAllowed) {
           this.logger.debug(`Link disallowed by robots.txt: ${link}`, {
@@ -372,70 +349,8 @@ export class WebCrawler {
     return { links: filteredLinks, denialReasons };
   }
 
-  public async getRobotsTxt(
-    skipTlsVerification = false,
-    abort?: AbortSignal,
-  ): Promise<string> {
-    try {
-      this.logger.debug("Attempting to fetch robots.txt", {
-        method: "getRobotsTxt",
-        initialUrl: this.initialUrl,
-        skipTlsVerification,
-      });
-
-      const { content: robotsTxt, url } = await fetchRobotsTxt(
-        {
-          url: this.robotsTxtUrl,
-          zeroDataRetention: false,
-        },
-        this.jobId,
-        this.logger,
-        abort,
-      );
-
-      this.logger.debug("Successfully fetched robots.txt", {
-        method: "getRobotsTxt",
-        initialUrl: this.initialUrl,
-        robotsTxtLength: robotsTxt.length,
-        hasContent: robotsTxt.length > 0,
-        finalUrl: url,
-      });
-
-      return robotsTxt;
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      this.logger.debug("Failed to fetch robots.txt", {
-        method: "getRobotsTxt",
-        initialUrl: this.initialUrl,
-        error: errMsg,
-      });
-      throw error;
-    }
-  }
-
-  public importRobotsTxt(txt: string) {
-    this.robotsTxt = txt;
-    const checker = createRobotsChecker(this.initialUrl, txt);
-    this.robots = checker.robots;
-    this.robotsTxtUrl = checker.robotsTxtUrl;
-    const delay =
-      this.robots.getCrawlDelay("FireCrawlAgent") ||
-      this.robots.getCrawlDelay("FirecrawlAgent");
-    this.robotsCrawlDelay = delay !== undefined ? delay : null;
-
-    const sitemaps = this.robots.getSitemaps();
-    this.logger.debug("Imported robots.txt", {
-      method: "importRobotsTxt",
-      robotsTxtUrl: this.robotsTxtUrl,
-      robotsTxtLength: txt.length,
-      sitemapsFound: sitemaps.length,
-      sitemaps: sitemaps,
-      crawlDelay: this.robotsCrawlDelay,
-    });
-  }
-
   public getRobotsCrawlDelay(): number | null {
-    return this.robotsCrawlDelay;
+    return null;
   }
 
   public async tryGetSitemap(
@@ -498,30 +413,17 @@ export class WebCrawler {
     });
 
     try {
-      const robotsSitemaps = this.robots.getSitemaps();
       this.logger.debug("Attempting to fetch sitemap links", {
         method: "tryGetSitemap",
         initialUrl: this.initialUrl,
-        robotsSitemapsCount: robotsSitemaps.length,
-        robotsSitemaps: robotsSitemaps,
-        hasRobotsTxt: this.robotsTxt.length > 0,
       });
 
       let count = (await Promise.race([
-        Promise.all([
-          this.tryFetchSitemapLinks(
-            this.initialUrl,
-            _urlsHandler,
-            abort,
-          ),
-          ...robotsSitemaps.map(x =>
-            this.tryFetchSitemapLinks(
-              x,
-              _urlsHandler,
-              abort,
-            ),
-          ),
-        ]).then(results => results.reduce((a, x) => a + x, 0)),
+        this.tryFetchSitemapLinks(
+          this.initialUrl,
+          _urlsHandler,
+          abort,
+        ),
         timeoutPromise,
       ]).finally(() => {
         clearTimeout(timeoutHandle);
@@ -559,8 +461,8 @@ export class WebCrawler {
       url: url,
       baseUrl: this.baseUrl,
       excludes: this.excludes,
-      ignoreRobotsTxt: this.ignoreRobotsTxt,
-      robotsTxt: this.robotsTxt,
+      ignoreRobotsTxt: true,
+      robotsTxt: "",
       allowExternalContentLinks: this.allowExternalContentLinks,
       allowSubdomains: this.allowSubdomains,
     });

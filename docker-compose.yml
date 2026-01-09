@@ -1,0 +1,24 @@
+services:
+  webcrawl:
+    build:
+      context: .
+      dockerfile: apps/WebCrawl/Dockerfile
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3002
+      PLAYWRIGHT_MICROSERVICE_URL: http://playwright-service:3003/scrape
+    ports:
+      - "3002:3002"
+    depends_on:
+      - playwright-service
+
+  playwright-service:
+    build:
+      context: ./apps/playwright-service-ts
+      dockerfile: Dockerfile
+      args:
+        PORT: 3003
+    environment:
+      PORT: 3003
+    ports:
+      - "3003:3003"

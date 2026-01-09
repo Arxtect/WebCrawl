@@ -85,7 +85,6 @@ export const crawlOptions = z.strictObject({
   allowBackwardCrawling: z.boolean().default(false),
   allowExternalContentLinks: z.boolean().default(false),
   allowSubdomains: z.boolean().default(false),
-  ignoreRobotsTxt: z.boolean().default(false),
   regexOnFullURL: z.boolean().default(false),
   headers: z.record(z.string(), z.string()).optional(),
   scrapeOptions: scrapeOptions.optional(),

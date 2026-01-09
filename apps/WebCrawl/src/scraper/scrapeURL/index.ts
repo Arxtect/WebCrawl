@@ -25,11 +25,6 @@ import {
 import { executeTransformers } from "./transformers";
 import { htmlTransform } from "./lib/removeUnwantedElements";
 import { rewriteUrl } from "./lib/rewriteUrl";
-import {
-  fetchRobotsTxt,
-  createRobotsChecker,
-  isUrlAllowedByRobots,
-} from "../../lib/robots-txt";
 import { AbortInstance, AbortManager } from "./lib/abortManager";
 import { ScrapeJobTimeoutError, CrawlDenialError } from "../../lib/error";
 
@@ -297,39 +292,6 @@ export async function scrapeURL(
   internalOptions: InternalOptions,
 ): Promise<ScrapeUrlResponse> {
   const meta = await buildMetaObject(id, url, options, internalOptions);
-
-  if (meta.internalOptions.teamFlags?.checkRobotsOnScrape) {
-    const urlToCheck = meta.rewrittenUrl || meta.url;
-    const urlObj = new URL(urlToCheck);
-    const isRobotsTxtPath = urlObj.pathname === "/robots.txt";
-
-    if (!isRobotsTxtPath) {
-      try {
-        const { content } = await fetchRobotsTxt(
-          {
-            url: urlToCheck,
-            zeroDataRetention: false,
-          },
-          id,
-          meta.logger,
-          meta.abort.asSignal(),
-        );
-        const checker = createRobotsChecker(urlToCheck, content);
-        const isAllowed = isUrlAllowedByRobots(urlToCheck, checker.robots);
-
-        if (!isAllowed) {
-          throw new CrawlDenialError("URL blocked by robots.txt");
-        }
-      } catch (error) {
-        if (error instanceof CrawlDenialError) {
-          return {
-            success: false,
-            error,
-          };
-        }
-      }
-    }
-  }
 
   try {
     const result = await scrapeURLWithFallbacks(meta);

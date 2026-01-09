@@ -1,0 +1,17 @@
+{
+  "name": "webcrawl-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:webcrawl": "bun run --cwd apps/WebCrawl dev",
+    "dev:playwright": "npm --prefix apps/playwright-service-ts run dev",
+    "dev:demo": "bun --prefix apps/webcrawl-demo run dev",
+    "dev:all": "concurrently -n webcrawl,playwright,demo -c cyan,magenta,green \"bun run --cwd apps/WebCrawl dev\" \"npm --prefix apps/playwright-service-ts run dev\" \"npm --prefix apps/webcrawl-demo run dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}

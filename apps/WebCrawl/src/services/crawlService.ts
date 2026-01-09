@@ -50,21 +50,9 @@ export async function crawlSite(
       allowBackwardCrawling: options.allowBackwardCrawling,
       allowExternalContentLinks: options.allowExternalContentLinks,
       allowSubdomains: options.allowSubdomains,
-      ignoreRobotsTxt: options.ignoreRobotsTxt,
       regexOnFullURL: options.regexOnFullURL,
       headers,
     });
-
-    if (!options.ignoreRobotsTxt) {
-      try {
-        const robotsTxt = await crawler.getRobotsTxt(
-          pageOptions.skipTlsVerification ?? false,
-        );
-        crawler.importRobotsTxt(robotsTxt);
-      } catch {
-        // If robots.txt fails, default to allowing crawl.
-      }
-    }
 
     const discovered = new Set<string>();
     const queue: string[] = [];

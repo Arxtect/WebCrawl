@@ -26,7 +26,7 @@ bun run dev
 ## Services
 
 - Playwright microservice (optional): set `PLAYWRIGHT_MICROSERVICE_URL`
-- HTML-to-Markdown microservice (optional): set `HTML_TO_MARKDOWN_SERVICE_URL`
+- Markdown conversion uses built-in Turndown.
 
 ## Deployment config
 
@@ -35,11 +35,10 @@ See `.env.example` for the full list. Common settings:
 - `HOST` and `PORT`: bind address and port for the API server.
 - `LOGGING_LEVEL`: log verbosity for the winston logger.
 - `PLAYWRIGHT_MICROSERVICE_URL`: enable dynamic rendering for JS-heavy pages.
-- `HTML_TO_MARKDOWN_SERVICE_URL` or `HTML_TO_MARKDOWN_PATH`: optional markdown service.
 - `PROXY_SERVER`, `PROXY_USERNAME`, `PROXY_PASSWORD`: outbound proxy for fetch/playwright.
 - `EXPOSE_ERROR_DETAILS`, `EXPOSE_ERROR_STACK`: return verbose errors (avoid in prod).
 - `FIRECRAWL_DEBUG_FILTER_LINKS`: verbose link filter logs when crawling.
 
 ## Native
 
-`@mendable/firecrawl-rs` is used as a local dependency in `apps/WebCrawl/native`.
+`@mendable/firecrawl-rs` is used as a local dependency in `packages/firecrawl-rs`.

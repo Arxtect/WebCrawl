@@ -12,9 +12,6 @@ const configSchema = z.object({
   ALLOW_LOCAL_WEBHOOKS: z.coerce.boolean().optional(),
 
   PLAYWRIGHT_MICROSERVICE_URL: z.string().optional(),
-  HTML_TO_MARKDOWN_SERVICE_URL: z.string().optional(),
-  HTML_TO_MARKDOWN_PATH: z.string().optional(),
-  USE_GO_MARKDOWN_PARSER: z.coerce.boolean().optional(),
 
   EXPOSE_ERROR_STACK: z.coerce.boolean().default(false),
   EXPOSE_ERROR_DETAILS: z.coerce.boolean().default(false),
