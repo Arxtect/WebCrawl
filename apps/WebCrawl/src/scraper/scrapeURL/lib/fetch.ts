@@ -211,12 +211,14 @@ export async function robustFetch<
       params: logParams,
       response: { status: response.status, body: response.body },
       requestId,
+      error,
     });
     throw new Error("Request sent malformed JSON", {
       cause: {
         params: logParams,
         response,
         requestId,
+        error,
       },
     });
   }
