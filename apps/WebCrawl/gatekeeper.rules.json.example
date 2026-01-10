@@ -1,0 +1,44 @@
+{
+  "global": {
+    "rules": [
+      {
+        "id": "login-redirect",
+        "block_class": "login",
+        "confidence": 0.8,
+        "signals": [
+          { "type": "status_in", "value": [401, 403] },
+          { "type": "redirect_to_login", "value": ["login", "signin"] }
+        ]
+      },
+      {
+        "id": "challenge-script",
+        "block_class": "challenge",
+        "signals": [
+          { "type": "contains_script", "value": "zse-ck" }
+        ]
+      }
+    ],
+    "thresholds": {
+      "min_html_bytes": 2048,
+      "min_visible_text_chars": 600,
+      "min_main_content_chars": 400
+    }
+  },
+  "domains": {
+    "example.com": {
+      "rules": [
+        {
+          "id": "example-soft-block",
+          "block_class": "soft_block",
+          "signals": [
+            { "type": "title_matches", "value": "欢迎来到" },
+            { "type": "body_text_len_lt", "value": 200 }
+          ]
+        }
+      ],
+      "thresholds": {
+        "min_html_bytes": 1024
+      }
+    }
+  }
+}

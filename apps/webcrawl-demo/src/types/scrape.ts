@@ -34,9 +34,30 @@ export type ScrapeResponse =
       requestId?: string;
     };
 
+export type CrawlResponse =
+  | {
+      success: true;
+      pages: ScrapeDocument[];
+      stats: {
+        discovered: number;
+        processed: number;
+        succeeded: number;
+        failed: number;
+      };
+      errors: { url: string; error: any }[];
+    }
+  | {
+      success: false;
+      error: unknown;
+      requestId?: string;
+    };
+
 export type StatusState = "idle" | "loading" | "success" | "error";
 
+export type ApiType = "scrape" | "crawl";
+
 export type FormState = {
+  apiType: ApiType;
   targetUrl: string;
   onlyMainContent: boolean;
   removeBase64Images: boolean;
@@ -46,6 +67,13 @@ export type FormState = {
   includeTags: string;
   excludeTags: string;
   headers: string;
+  // Crawl options
+  crawlLimit: string;
+  crawlMaxDepth: string;
+  crawlAllowBackward: boolean;
+  crawlAllowSubdomains: boolean;
+  crawlIncludes: string;
+  crawlExcludes: string;
 };
 
 export type LightpandaMetadata = {

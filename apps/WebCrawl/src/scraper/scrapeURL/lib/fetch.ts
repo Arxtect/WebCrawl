@@ -66,7 +66,6 @@ export async function robustFetch<
     headers,
     schema,
     ignoreResponse,
-    ignoreFailure,
     ignoreFailureStatus,
     tryCount,
     tryCooldown,
@@ -186,7 +185,6 @@ export async function robustFetch<
         ...params,
         requestId,
         tryCount: tryCount - 1,
-        mock,
       });
     } else {
       logger.debug("Request sent failure status", {

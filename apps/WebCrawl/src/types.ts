@@ -72,6 +72,11 @@ export type Document = {
     title?: string;
     contentType?: string;
     proxyUsed: "basic" | "stealth";
+    renderStatus?: "loaded" | "timeout" | "nav_error";
+    contentStatus?: "usable" | "thin" | "challenge" | "login" | "soft_block";
+    gatekeeper?: any;
+    evidence?: any;
+    headers?: Record<string, string>;
     [key: string]: unknown;
   };
   warning?: string;

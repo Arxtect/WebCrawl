@@ -17,6 +17,8 @@ import {
   ShieldAlert,
   Server,
   Filter,
+  Layers,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { CodeBlock } from "../components/CodeBlock";
@@ -25,7 +27,7 @@ import { ListPanel } from "../components/ListPanel";
 import { SummaryItem } from "../components/SummaryItem";
 import { TabPanel } from "../components/TabPanel";
 import { joinUrl, parseTagList } from "../utils/request";
-import type { FormatKey, FormState, ScrapeResponse, StatusState } from "../types/scrape";
+import type { FormatKey, FormState, ScrapeResponse, CrawlResponse, StatusState } from "../types/scrape";
 
 const formatOptions: { key: FormatKey; label: string; icon: ReactNode }[] = [
   { key: "markdown", label: "Markdown", icon: <FileText className="w-4 h-4" /> },
@@ -54,6 +56,7 @@ const defaultFormats: Record<FormatKey, boolean> = {
 };
 
 const defaultFormState: FormState = {
+  apiType: "scrape",
   targetUrl: "",
   onlyMainContent: true,
   removeBase64Images: true,
@@ -63,6 +66,12 @@ const defaultFormState: FormState = {
   includeTags: "",
   excludeTags: "",
   headers: "",
+  crawlLimit: "10",
+  crawlMaxDepth: "1",
+  crawlAllowBackward: false,
+  crawlAllowSubdomains: false,
+  crawlIncludes: "",
+  crawlExcludes: "",
 };
 
 const statusStyles: Record<StatusState, { label: string; className: string; icon: ReactNode }> = {
@@ -79,8 +88,9 @@ export function WebCrawlView() {
   const [duration, setDuration] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [lastRequest, setLastRequest] = useState<Record<string, unknown> | null>(null);
-  const [response, setResponse] = useState<ScrapeResponse | null>(null);
+  const [response, setResponse] = useState<ScrapeResponse | CrawlResponse | null>(null);
   const [activeTab, setActiveTab] = useState("markdown");
+  const [selectedCrawlPageIndex, setSelectedCrawlPageIndex] = useState(0);
 
   const requestPreview = useMemo(() => {
     if (!lastRequest && !response) {
@@ -89,7 +99,13 @@ export function WebCrawlView() {
     return JSON.stringify({ request: lastRequest, response }, null, 2);
   }, [lastRequest, response]);
 
-  const document = response && response.success ? response.document : null;
+  const document = useMemo(() => {
+    if (!response || !response.success) return null;
+    if ("document" in response) return response.document;
+    if ("pages" in response) return response.pages[selectedCrawlPageIndex] || null;
+    return null;
+  }, [response, selectedCrawlPageIndex]);
+
   const summary = document?.metadata;
 
   function updateForm<K extends keyof typeof formState>(key: K, value: (typeof formState)[K]) {
@@ -109,6 +125,7 @@ export function WebCrawlView() {
     setLastRequest(null);
     setResponse(null);
     setActiveTab("markdown");
+    setSelectedCrawlPageIndex(0);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -136,57 +153,85 @@ export function WebCrawlView() {
       .filter(option => formats[option.key])
       .map(option => ({ type: option.key }));
 
-    const body: Record<string, unknown> = {
-      url: formState.targetUrl.trim(),
+    const scrapeOptions: Record<string, unknown> = {
       formats: selectedFormats.length ? selectedFormats : [{ type: "markdown" }],
       onlyMainContent: formState.onlyMainContent,
       removeBase64Images: formState.removeBase64Images,
     };
 
     if (formState.skipTlsVerification) {
-      body.skipTlsVerification = true;
+      scrapeOptions.skipTlsVerification = true;
     }
 
     const waitFor = Number(formState.waitFor);
     if (!Number.isNaN(waitFor) && waitFor > 0) {
-      body.waitFor = waitFor;
+      scrapeOptions.waitFor = waitFor;
     }
 
     const timeout = Number(formState.timeout);
     if (!Number.isNaN(timeout) && timeout > 0) {
-      body.timeout = timeout;
+      scrapeOptions.timeout = timeout;
     }
 
     const includeTags = parseTagList(formState.includeTags);
     if (includeTags.length > 0) {
-      body.includeTags = includeTags;
+      scrapeOptions.includeTags = includeTags;
     }
 
     const excludeTags = parseTagList(formState.excludeTags);
     if (excludeTags.length > 0) {
-      body.excludeTags = excludeTags;
+      scrapeOptions.excludeTags = excludeTags;
     }
 
     if (headers) {
-      body.headers = headers;
+      scrapeOptions.headers = headers;
+    }
+
+    let body: Record<string, unknown>;
+    let endpointPath: string;
+
+    if (formState.apiType === "scrape") {
+      body = {
+        url: formState.targetUrl.trim(),
+        ...scrapeOptions,
+      };
+      endpointPath = "/scrape";
+    } else {
+      body = {
+        url: formState.targetUrl.trim(),
+        scrapeOptions,
+        limit: Number(formState.crawlLimit) || 10,
+        maxDepth: Number(formState.crawlMaxDepth) || 1,
+        allowBackwardCrawling: formState.crawlAllowBackward,
+        allowSubdomains: formState.crawlAllowSubdomains,
+      };
+      const crawlIncludes = parseTagList(formState.crawlIncludes);
+      if (crawlIncludes.length > 0) body.includes = crawlIncludes;
+      const crawlExcludes = parseTagList(formState.crawlExcludes);
+      if (crawlExcludes.length > 0) body.excludes = crawlExcludes;
+      endpointPath = "/crawl";
     }
 
     setStatus("loading");
     setDuration(null);
     setLastRequest(body);
     setResponse(null);
+    setSelectedCrawlPageIndex(0);
 
     const start = performance.now();
     try {
-      const endpoint = joinUrl("/api", "/scrape");
+      const endpoint = joinUrl("/api", endpointPath);
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const payload = (await res.json()) as ScrapeResponse;
+      const payload = (await res.json()) as ScrapeResponse | CrawlResponse;
       setResponse(payload);
       setStatus(payload.success ? "success" : "error");
+      if (payload.success && "pages" in payload && payload.pages.length > 0) {
+        setSelectedCrawlPageIndex(0);
+      }
     } catch (error) {
       setStatus("error");
       setErrorMessage(error instanceof Error ? error.message : String(error));
@@ -208,6 +253,31 @@ export function WebCrawlView() {
 
           <form className="p-6" onSubmit={handleSubmit}>
             <div className="space-y-8">
+              <div className="space-y-4">
+                <FormSectionTitle>接口类型</FormSectionTitle>
+                <div className="flex gap-2 p-1 bg-slate-100 rounded-2xl">
+                  {[
+                    { key: "scrape", label: "Scrape", desc: "单页抓取", icon: <FileText className="w-4 h-4" /> },
+                    { key: "crawl", label: "Crawl", desc: "站点爬取", icon: <Layers className="w-4 h-4" /> },
+                  ].map(type => (
+                    <button
+                      key={type.key}
+                      type="button"
+                      onClick={() => updateForm("apiType", type.key as any)}
+                      className={cn(
+                        "flex flex-1 items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold transition-all",
+                        formState.apiType === type.key
+                          ? "bg-white text-teal-600 shadow-sm ring-1 ring-slate-200"
+                          : "text-slate-500 hover:text-slate-700",
+                      )}
+                    >
+                      {type.icon}
+                      <span>{type.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="space-y-4">
                 <FormSectionTitle>基础信息</FormSectionTitle>
 
@@ -275,8 +345,8 @@ export function WebCrawlView() {
                       className={cn(
                         "group flex items-start justify-between gap-4 rounded-2xl border p-4 transition-all cursor-pointer",
                         formState[item.key as keyof typeof defaultFormState]
-                          ? "border-teal-500 bg-teal-50/30"
-                          : "border-slate-100 hover:border-slate-200",
+                          ? "border-teal-500 bg-white ring-2 ring-teal-500/10 shadow-sm"
+                          : "border-slate-100 hover:border-slate-200 bg-slate-50/50 hover:bg-white",
                       )}
                     >
                       <input
@@ -287,13 +357,19 @@ export function WebCrawlView() {
                       />
 
                       <div className="min-w-0 flex-1">
-                        <div
-                          className={cn(
-                            "text-xs font-bold",
-                            item.danger && !formState[item.key as keyof typeof defaultFormState] ? "text-amber-600" : "text-slate-800",
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={cn(
+                              "text-xs font-bold",
+                              item.danger && !formState[item.key as keyof typeof defaultFormState] ? "text-amber-600" : "text-slate-800",
+                              formState[item.key as keyof typeof defaultFormState] && "text-teal-700",
+                            )}
+                          >
+                            {item.label}
+                          </div>
+                          {formState[item.key as keyof typeof defaultFormState] && (
+                            <CheckCircle className="h-3.5 w-3.5 text-teal-500" />
                           )}
-                        >
-                          {item.label}
                         </div>
                         <div className="text-[10px] text-slate-400 mt-0.5">{item.desc}</div>
                       </div>
@@ -302,7 +378,7 @@ export function WebCrawlView() {
                           "relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-all",
                           formState[item.key as keyof typeof defaultFormState]
                             ? "border-teal-600 bg-teal-600"
-                            : "border-slate-200 bg-white",
+                            : "border-slate-200 bg-slate-200",
                         )}
                       >
                         <span
@@ -316,6 +392,101 @@ export function WebCrawlView() {
                   ))}
                 </div>
               </div>
+
+              {formState.apiType === "crawl" && (
+                <div className="space-y-4">
+                  <FormSectionTitle>爬取配置 (Crawl Only)</FormSectionTitle>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="group relative">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">最大页面数</label>
+                      <input
+                        type="number"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 text-xs font-medium focus:border-teal-500 focus:bg-white focus:outline-none"
+                        value={formState.crawlLimit}
+                        onChange={e => updateForm("crawlLimit", e.target.value)}
+                        placeholder="10"
+                      />
+                    </div>
+                    <div className="group relative">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">最大深度</label>
+                      <input
+                        type="number"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 text-xs font-medium focus:border-teal-500 focus:bg-white focus:outline-none"
+                        value={formState.crawlMaxDepth}
+                        onChange={e => updateForm("crawlMaxDepth", e.target.value)}
+                        placeholder="1"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3">
+                    {[
+                      { key: "crawlAllowBackward", label: "允许回退爬取", desc: "允许爬取路径层级高于初始 URL 的页面" },
+                      { key: "crawlAllowSubdomains", label: "允许子域名", desc: "允许爬取同主域下的子域名" },
+                    ].map(item => (
+                      <label
+                        key={item.key}
+                        className={cn(
+                          "group flex items-start justify-between gap-4 rounded-2xl border p-4 transition-all cursor-pointer",
+                          formState[item.key as keyof typeof defaultFormState]
+                            ? "border-teal-500 bg-white ring-2 ring-teal-500/10 shadow-sm"
+                            : "border-slate-100 hover:border-slate-200 bg-slate-50/50 hover:bg-white",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          className="hidden"
+                          checked={formState[item.key as keyof typeof defaultFormState] as boolean}
+                          onChange={event => updateForm(item.key as keyof typeof formState, event.target.checked as never)}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <div className={cn("text-xs font-bold", formState[item.key as keyof typeof defaultFormState] ? "text-teal-700" : "text-slate-800")}>
+                              {item.label}
+                            </div>
+                            {formState[item.key as keyof typeof defaultFormState] && <CheckCircle className="h-3.5 w-3.5 text-teal-500" />}
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">{item.desc}</div>
+                        </div>
+                        <div
+                          className={cn(
+                            "relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-all",
+                            formState[item.key as keyof typeof defaultFormState] ? "border-teal-600 bg-teal-600" : "border-slate-200 bg-slate-200",
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform",
+                              formState[item.key as keyof typeof defaultFormState] ? "translate-x-6" : "translate-x-1",
+                            )}
+                          />
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="group">
+                      <label className="flex items-center gap-2 mb-1 text-xs font-medium text-slate-500">包含路径 (Glob/Regex)</label>
+                      <input
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs transition focus:border-teal-500 focus:bg-white focus:outline-none"
+                        value={formState.crawlIncludes}
+                        onChange={e => updateForm("crawlIncludes", e.target.value)}
+                        placeholder="/blog/*, /products/.*"
+                      />
+                    </div>
+                    <div className="group">
+                      <label className="flex items-center gap-2 mb-1 text-xs font-medium text-slate-500">排除路径 (Glob/Regex)</label>
+                      <input
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs transition focus:border-teal-500 focus:bg-white focus:outline-none"
+                        value={formState.crawlExcludes}
+                        onChange={e => updateForm("crawlExcludes", e.target.value)}
+                        placeholder="/admin/*, /login"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-4 border-t border-dashed border-slate-200 pt-4">
                 <div className="grid grid-cols-2 gap-4">
@@ -433,7 +604,49 @@ export function WebCrawlView() {
           </div>
 
           <div className="p-6">
-            {response?.success && (
+            {response?.success && "stats" in response && (
+              <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+                <SummaryItem label="总计发现" value={response.stats.discovered} />
+                <SummaryItem label="已处理" value={response.stats.processed} />
+                <SummaryItem label="成功" value={response.stats.succeeded} statusCode={200} />
+                <SummaryItem label="失败" value={response.stats.failed} statusCode={response.stats.failed > 0 ? 500 : 200} />
+              </div>
+            )}
+
+            {response?.success && "pages" in response && (
+              <div className="mb-6 space-y-2">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400">选择页面 ({response.pages.length})</label>
+                <div className="flex flex-wrap gap-2">
+                  {response.pages.map((page, index) => (
+                    <button
+                      key={index}
+                      onClick={() => setSelectedCrawlPageIndex(index)}
+                      className={cn(
+                        "flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all",
+                        selectedCrawlPageIndex === index
+                          ? "border-teal-500 bg-teal-50 text-teal-700 ring-1 ring-teal-500/20"
+                          : "border-slate-100 bg-white text-slate-500 hover:border-slate-200 hover:bg-slate-50",
+                      )}
+                    >
+                      <div className={cn("h-1.5 w-1.5 rounded-full", page.metadata.statusCode < 400 ? "bg-emerald-500" : "bg-rose-500")} />
+                      <span className="max-w-[150px] truncate">{page.metadata.title || page.metadata.url}</span>
+                      {selectedCrawlPageIndex === index && <ChevronRight className="h-3 w-3" />}
+                    </button>
+                  ))}
+                  {response.errors && response.errors.map((err, index) => (
+                    <div
+                      key={`err-${index}`}
+                      className="flex items-center gap-2 rounded-lg border border-rose-100 bg-rose-50/50 px-3 py-1.5 text-xs font-medium text-rose-600"
+                    >
+                      <AlertCircle className="h-3 w-3" />
+                      <span className="max-w-[150px] truncate">{err.url}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {response?.success && !("pages" in response) && (
               <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
                 <SummaryItem label="HTTP 状态" value={summary?.statusCode} statusCode={summary?.statusCode as number} />
                 <SummaryItem label="Content-Type" value={summary?.contentType} />

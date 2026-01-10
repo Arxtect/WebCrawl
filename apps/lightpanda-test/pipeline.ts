@@ -50,6 +50,53 @@ const toNumber = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const QUALITY_THRESHOLDS = {
+  min_html_bytes: toNumber(process.env.MIN_HTML_BYTES, 2048),
+  min_visible_text_chars: toNumber(process.env.MIN_VISIBLE_TEXT_CHARS, 600),
+  min_main_content_chars: toNumber(process.env.MIN_MAIN_CONTENT_CHARS, 400),
+};
+
+const assessContent = (html: string, title: string, statusCode: number) => {
+  const htmlBytes = Buffer.byteLength(html || "");
+  const visibleText = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const mainContentChars = visibleText.length;
+
+  const signals: string[] = [];
+  if (statusCode && [401, 403, 429].includes(statusCode)) signals.push("status_blocked");
+  if (html.includes("captcha") || html.includes("zse-ck")) signals.push("challenge_script");
+  if (title.includes("登录") || title.toLowerCase().includes("login")) signals.push("login_title");
+  if (htmlBytes < QUALITY_THRESHOLDS.min_html_bytes) signals.push("html_too_small");
+  if (visibleText.length < QUALITY_THRESHOLDS.min_visible_text_chars) signals.push("text_too_small");
+  if (mainContentChars < QUALITY_THRESHOLDS.min_main_content_chars) signals.push("main_content_small");
+
+  let contentStatus: "usable" | "thin" | "challenge" | "login" = "usable";
+  if (signals.includes("login_title")) contentStatus = "login";
+  else if (signals.includes("challenge_script") || signals.includes("status_blocked")) contentStatus = "challenge";
+  else if (
+    signals.includes("html_too_small") ||
+    signals.includes("text_too_small") ||
+    signals.includes("main_content_small")
+  )
+    contentStatus = "thin";
+
+  return {
+    contentStatus,
+    signals,
+    quality: {
+      htmlBytes,
+      visibleTextChars: visibleText.length,
+      mainContentChars,
+      thresholds: QUALITY_THRESHOLDS,
+    },
+  };
+};
+
 export const getBaseConfig = (): PipelineConfig => ({
   cdpUrl: process.env.LIGHTPANDA_CDP_URL || DEFAULT_CDP_URL,
   targetUrl: DEFAULT_TARGET_URL,
@@ -144,6 +191,8 @@ export const runPipeline = async (config: PipelineConfig): Promise<PipelineResul
 
     dom.window.close();
 
+    const quality = assessContent(rawHtml, article?.title || title, statusCode);
+
     return {
       success: true,
       document: {
@@ -159,6 +208,21 @@ export const runPipeline = async (config: PipelineConfig): Promise<PipelineResul
           title: article?.title || title,
           contentType,
           engine: "lightpanda",
+          renderStatus: "loaded",
+          contentStatus: quality.contentStatus,
+          gatekeeper: {
+            blockClass: quality.contentStatus === "usable" ? "none" : quality.contentStatus,
+            confidence: quality.contentStatus === "usable" ? 0 : 0.6,
+            evidence: [
+              {
+                ruleId: "lightpanda-quality",
+                signals: quality.signals,
+                blockClass: quality.contentStatus === "usable" ? "none" : quality.contentStatus,
+                confidence: 0.6,
+              },
+            ],
+            quality: quality.quality,
+          },
         },
       },
     };

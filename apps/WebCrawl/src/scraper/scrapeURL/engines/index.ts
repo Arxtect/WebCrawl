@@ -24,7 +24,13 @@ export type EngineScrapeResult = {
   error?: string;
   pdfMetadata?: { numPages: number; title?: string };
   contentType?: string;
+  headers?: Record<string, string>;
   proxyUsed: "basic" | "stealth";
+  trace?: {
+    renderStatus?: "loaded" | "timeout" | "nav_error";
+    contentStatus?: "usable" | "thin" | "challenge" | "login" | "soft_block";
+    evidence?: any;
+  };
 };
 
 const engineHandlers: {

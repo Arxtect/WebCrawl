@@ -9,6 +9,16 @@ import {
 } from "../utils/safeFetch";
 import { TextDecoder } from "util";
 
+type CacheEntry = {
+  etag?: string;
+  lastModified?: string;
+  body?: string;
+  contentType?: string;
+  status?: number;
+};
+
+const responseCache = new Map<string, CacheEntry>();
+
 export async function scrapeURLWithFetch(
   meta: Meta,
 ): Promise<EngineScrapeResult> {
@@ -20,12 +30,39 @@ export async function scrapeURLWithFetch(
   };
 
   try {
+    const cached = responseCache.get(meta.rewrittenUrl ?? meta.url);
+    const conditionalHeaders: Record<string, string> = {};
+    if (cached?.etag && !meta.options.headers?.["If-None-Match"]) {
+      conditionalHeaders["If-None-Match"] = cached.etag;
+    }
+    if (cached?.lastModified && !meta.options.headers?.["If-Modified-Since"]) {
+      conditionalHeaders["If-Modified-Since"] = cached.lastModified;
+    }
+
     const x = await undici.fetch(meta.rewrittenUrl ?? meta.url, {
       dispatcher: getSecureDispatcher(meta.options.skipTlsVerification),
       redirect: "follow",
-      headers: meta.options.headers,
+      headers: { ...meta.options.headers, ...conditionalHeaders },
       signal: meta.abort.asSignal(),
     });
+
+    if (x.status === 304 && cached?.body) {
+      response = {
+        url: x.url,
+        body: cached.body,
+        status: cached.status ?? 304,
+        headers: [...x.headers],
+      };
+      return {
+        url: response.url,
+        html: response.body,
+        statusCode: response.status,
+        contentType: cached.contentType,
+        proxyUsed: "basic",
+        headers: Object.fromEntries(response.headers as any),
+        trace: { renderStatus: "loaded" },
+      };
+    }
 
     const buf = Buffer.from(await x.arrayBuffer());
     let text = buf.toString("utf8");
@@ -49,6 +86,18 @@ export async function scrapeURLWithFetch(
       status: x.status,
       headers: [...x.headers],
     };
+
+    const etag = x.headers.get("etag") ?? undefined;
+    const lastModified = x.headers.get("last-modified") ?? undefined;
+    responseCache.set(meta.rewrittenUrl ?? meta.url, {
+      etag,
+      lastModified,
+      body: text,
+      contentType:
+        (response.headers.find(x => x[0].toLowerCase() === "content-type") ??
+          [])[1] ?? undefined,
+      status: x.status,
+    });
   } catch (error) {
     if (
       error instanceof TypeError &&
@@ -80,7 +129,9 @@ export async function scrapeURLWithFetch(
       (response.headers.find(x => x[0].toLowerCase() === "content-type") ??
         [])[1] ?? undefined,
 
+    headers: Object.fromEntries(response.headers as any),
     proxyUsed: "basic",
+    trace: { renderStatus: "loaded" },
   };
 }
 

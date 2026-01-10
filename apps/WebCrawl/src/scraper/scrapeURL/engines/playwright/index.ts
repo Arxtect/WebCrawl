@@ -27,6 +27,11 @@ export async function scrapeURLWithPlaywright(
       pageStatusCode: z.number(),
       pageError: z.string().optional(),
       contentType: z.string().optional(),
+      render_status: z.enum(["loaded", "timeout", "nav_error"]).optional(),
+      content_status: z
+        .enum(["usable", "thin", "challenge", "login", "soft_block"])
+        .optional(),
+      evidence: z.any().optional(),
     }),
     abort: meta.abort.asSignal(),
   });
@@ -43,6 +48,11 @@ export async function scrapeURLWithPlaywright(
     contentType: response.contentType,
 
     proxyUsed: "basic",
+    trace: {
+      renderStatus: response.render_status ?? "loaded",
+      contentStatus: response.content_status,
+      evidence: response.evidence,
+    },
   };
 }
 

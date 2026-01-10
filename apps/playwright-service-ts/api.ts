@@ -1,8 +1,10 @@
 import express, { Request, Response } from 'express';
 import bodyParser from 'body-parser';
-import { chromium, Browser, BrowserContext, Route, Request as PlaywrightRequest, Page } from 'playwright';
+import { chromium, Browser, BrowserContext, Route, Request as PlaywrightRequest, Page, errors as PlaywrightErrors } from 'playwright';
 import dotenv from 'dotenv';
 import UserAgent from 'user-agents';
+import fs from 'fs';
+import path from 'path';
 import { getError } from './helpers/get_error';
 import { 
   initializeStealthBrowser, 
@@ -26,6 +28,29 @@ const PROXY_SERVER = process.env.PROXY_SERVER || null;
 const PROXY_USERNAME = process.env.PROXY_USERNAME || null;
 const PROXY_PASSWORD = process.env.PROXY_PASSWORD || null;
 const USE_STEALTH = (process.env.USE_STEALTH || 'True').toUpperCase() === 'TRUE';
+const ENABLE_STORAGE_CACHE = (process.env.ENABLE_STORAGE_CACHE || 'True').toUpperCase() === 'TRUE';
+const STORAGE_DIR = process.env.STORAGE_DIR || path.join(__dirname, '..', 'storage');
+
+const ensureStorageDir = () => {
+  if (!fs.existsSync(STORAGE_DIR)) {
+    fs.mkdirSync(STORAGE_DIR, { recursive: true });
+  }
+};
+
+const getStoragePathForUrl = (url: string) => {
+  try {
+    const host = new URL(url).hostname.replace(/[^a-zA-Z0-9.-]/g, '_');
+    return path.join(STORAGE_DIR, `${host}.json`);
+  } catch {
+    return path.join(STORAGE_DIR, `unknown.json`);
+  }
+};
+
+const CONTENT_THRESHOLDS = {
+  min_html_bytes: Number(process.env.MIN_HTML_BYTES ?? 2048),
+  min_visible_text_chars: Number(process.env.MIN_VISIBLE_TEXT_CHARS ?? 600),
+  min_main_content_chars: Number(process.env.MIN_MAIN_CONTENT_CHARS ?? 400),
+};
 
 // User agent rotator for enhanced anti-detection
 const userAgentRotator = new UserAgentRotator('desktop', 5);
@@ -86,6 +111,64 @@ const AD_SERVING_DOMAINS = [
   'amazon-adsystem.com'
 ];
 
+const stripText = (html: string) =>
+  html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const detectContentStatus = (html: string, status: number | null, finalUrl: string, title: string) => {
+  const htmlBytes = Buffer.byteLength(html || '');
+  const visibleText = stripText(html || '');
+  const mainContentChars = visibleText.length;
+  const signals: string[] = [];
+
+  if (status && [403, 429].includes(status)) signals.push('status_blocked');
+  if (html.includes('zse-ck') || html.includes('gee-test') || html.includes('captcha')) signals.push('challenge_script');
+  if (title.includes('登录') || title.toLowerCase().includes('login')) signals.push('title_login');
+  if (finalUrl && /login|signin/.test(finalUrl)) signals.push('redirect_to_login');
+  if (htmlBytes < CONTENT_THRESHOLDS.min_html_bytes) signals.push('html_too_small');
+  if (visibleText.length < CONTENT_THRESHOLDS.min_visible_text_chars) signals.push('text_too_small');
+  if (mainContentChars < CONTENT_THRESHOLDS.min_main_content_chars) signals.push('main_content_small');
+
+  let content_status: 'usable' | 'thin' | 'challenge' | 'login' | 'soft_block' = 'usable';
+  if (signals.includes('title_login') || signals.includes('redirect_to_login')) {
+    content_status = 'login';
+  } else if (signals.includes('challenge_script') || signals.includes('status_blocked')) {
+    content_status = 'challenge';
+  } else if (
+    signals.includes('html_too_small') ||
+    signals.includes('text_too_small') ||
+    signals.includes('main_content_small')
+  ) {
+    content_status = 'thin';
+  }
+
+  return {
+    content_status,
+    matched_signals: signals,
+    quality: {
+      htmlBytes,
+      visibleTextChars: visibleText.length,
+      mainContentChars,
+    },
+  };
+};
+
+const persistStorageState = async (context: BrowserContext | null, url: string | undefined) => {
+  if (!context || !url || !ENABLE_STORAGE_CACHE) return;
+  try {
+    ensureStorageDir();
+    const statePath = getStoragePathForUrl(url);
+    await context.storageState({ path: statePath });
+  } catch (err) {
+    console.warn('Failed to persist storage state', err);
+  }
+};
+
 interface UrlModel {
   url: string;
   wait_after_load?: number;
@@ -112,7 +195,7 @@ const initializeBrowser = async () => {
   });
 };
 
-const createContext = async (skipTlsVerification: boolean = false, useEnhancedStealth: boolean = false) => {
+const createContext = async (skipTlsVerification: boolean = false, useEnhancedStealth: boolean = false, persistKey?: string) => {
   // Use realistic user agent from our custom module for better anti-detection
   const userAgent = useEnhancedStealth ? userAgentRotator.getNext() : new UserAgent().toString();
   const viewport = { width: 1280, height: 800 };
@@ -122,6 +205,14 @@ const createContext = async (skipTlsVerification: boolean = false, useEnhancedSt
     viewport,
     ignoreHTTPSErrors: skipTlsVerification,
   };
+
+  if (ENABLE_STORAGE_CACHE && persistKey) {
+    ensureStorageDir();
+    const statePath = getStoragePathForUrl(persistKey);
+    if (fs.existsSync(statePath)) {
+      contextOptions.storageState = statePath;
+    }
+  }
 
   // Add extra headers for stealth mode
   if (useEnhancedStealth) {
@@ -178,19 +269,49 @@ const isValidUrl = (urlString: string): boolean => {
   }
 };
 
-const scrapePage = async (page: Page, url: string, waitUntil: 'load' | 'networkidle', waitAfterLoad: number, timeout: number, checkSelector: string | undefined) => {
-  console.log(`Navigating to ${url} with waitUntil: ${waitUntil} and timeout: ${timeout}ms`);
-  const response = await page.goto(url, { waitUntil, timeout });
+type ScrapeResult = {
+  content: string;
+  status: number | null;
+  headers: Record<string, string> | null;
+  contentType?: string;
+  renderStatus: 'loaded' | 'timeout' | 'nav_error';
+  finalUrl: string;
+  title: string;
+  contentStatus: 'usable' | 'thin' | 'challenge' | 'login' | 'soft_block';
+  evidence: {
+    matched_signals: string[];
+    quality: {
+      htmlBytes: number;
+      visibleTextChars: number;
+      mainContentChars: number;
+    };
+  };
+};
 
-  if (waitAfterLoad > 0) {
+const scrapePage = async (page: Page, url: string, waitUntil: 'load' | 'networkidle', waitAfterLoad: number, timeout: number, checkSelector: string | undefined): Promise<ScrapeResult> => {
+  console.log(`Navigating to ${url} with waitUntil: ${waitUntil} and timeout: ${timeout}ms`);
+  let renderStatus: 'loaded' | 'timeout' | 'nav_error' = 'loaded';
+  let response = null;
+
+  try {
+    response = await page.goto(url, { waitUntil, timeout });
+  } catch (error) {
+    if (error instanceof PlaywrightErrors.TimeoutError) {
+      renderStatus = 'timeout';
+    } else {
+      renderStatus = 'nav_error';
+    }
+  }
+
+  if (renderStatus === 'loaded' && waitAfterLoad > 0) {
     await page.waitForTimeout(waitAfterLoad);
   }
 
-  if (checkSelector) {
+  if (renderStatus === 'loaded' && checkSelector) {
     try {
       await page.waitForSelector(checkSelector, { timeout });
     } catch (error) {
-      throw new Error('Required selector not found');
+      renderStatus = 'nav_error';
     }
   }
 
@@ -204,11 +325,23 @@ const scrapePage = async (page: Page, url: string, waitUntil: 'load' | 'networki
     }
   }
 
+  const finalUrl = page.url();
+  const title = await page.title();
+  const contentSignals = detectContentStatus(content, response ? response.status() : null, finalUrl, title);
+
   return {
     content,
     status: response ? response.status() : null,
     headers,
     contentType: ct,
+    renderStatus,
+    finalUrl,
+    title,
+    contentStatus: contentSignals.content_status,
+    evidence: {
+      matched_signals: contentSignals.matched_signals,
+      quality: contentSignals.quality,
+    },
   };
 };
 
@@ -272,7 +405,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
   let stealthBrowser = null;
 
   try {
-    let result;
+    let result: ScrapeResult;
     if (USE_STEALTH) {
       stealthBrowser = getStealthBrowser();
       if (!stealthBrowser) {
@@ -283,15 +416,30 @@ app.post('/scrape', async (req: Request, res: Response) => {
         } : undefined;
         stealthBrowser = await initializeStealthBrowser({ proxy: proxyConfig });
       }
-      result = await scrapeWithStealth(stealthBrowser!, url, {
+      const stealthResult = await scrapeWithStealth(stealthBrowser!, url, {
         waitAfterLoad: wait_after_load,
         timeout,
         headers,
         checkSelector: check_selector,
         skipTlsVerification: skip_tls_verification,
       });
+      const signals = detectContentStatus(stealthResult.content, stealthResult.status, url, '');
+      result = {
+        content: stealthResult.content,
+        status: stealthResult.status,
+        headers: stealthResult.headers,
+        contentType: stealthResult.contentType,
+        renderStatus: 'loaded',
+        finalUrl: url,
+        title: '',
+        contentStatus: signals.content_status,
+        evidence: {
+          matched_signals: signals.matched_signals,
+          quality: signals.quality,
+        },
+      };
     } else {
-      requestContext = await createContext(skip_tls_verification);
+      requestContext = await createContext(skip_tls_verification, false, url);
       page = await requestContext.newPage();
 
       if (headers) {
@@ -313,6 +461,9 @@ app.post('/scrape', async (req: Request, res: Response) => {
       content: result.content,
       pageStatusCode: result.status,
       contentType: result.contentType,
+      render_status: result.renderStatus,
+      content_status: result.contentStatus,
+      evidence: result.evidence,
       ...(pageError && { pageError })
     });
 
@@ -321,7 +472,10 @@ app.post('/scrape', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'An error occurred while fetching the page.' });
   } finally {
     if (page) await page.close();
-    if (requestContext) await requestContext.close();
+    if (requestContext) {
+      await persistStorageState(requestContext, url);
+      await requestContext.close();
+    }
     pageSemaphore.release();
   }
 });
@@ -371,6 +525,7 @@ app.post('/scrape-stealth', async (req: Request, res: Response) => {
     });
 
     const pageError = result.status !== 200 ? getError(result.status) : undefined;
+    const contentSignals = detectContentStatus(result.content, result.status, url, '');
 
     if (!pageError) {
       console.log(`✅ Stealth scrape successful!`);
@@ -382,6 +537,12 @@ app.post('/scrape-stealth', async (req: Request, res: Response) => {
       content: result.content,
       pageStatusCode: result.status,
       contentType: result.contentType,
+      render_status: 'loaded',
+      content_status: contentSignals.content_status,
+      evidence: {
+        matched_signals: contentSignals.matched_signals,
+        quality: contentSignals.quality,
+      },
       ...(pageError && { pageError })
     });
 
@@ -448,12 +609,19 @@ app.post('/scrape-enhanced', async (req: Request, res: Response) => {
       });
 
       const pageError = result.status !== 200 ? getError(result.status) : undefined;
+      const contentSignals = detectContentStatus(result.content, result.status, url, '');
 
       res.json({
         content: result.content,
         pageStatusCode: result.status,
         contentType: result.contentType,
         engine: 'stealth',
+        render_status: 'loaded',
+        content_status: contentSignals.content_status,
+        evidence: {
+          matched_signals: contentSignals.matched_signals,
+          quality: contentSignals.quality,
+        },
         ...(pageError && { pageError })
       });
     } else {
@@ -462,7 +630,7 @@ app.post('/scrape-enhanced', async (req: Request, res: Response) => {
         await initializeBrowser();
       }
 
-      const requestContext = await createContext(skip_tls_verification, true);
+      const requestContext = await createContext(skip_tls_verification, true, url);
       const page = await requestContext.newPage();
 
       try {
@@ -472,16 +640,24 @@ app.post('/scrape-enhanced', async (req: Request, res: Response) => {
 
         const result = await scrapePage(page, url, 'load', wait_after_load, timeout, check_selector);
         const pageError = result.status !== 200 ? getError(result.status) : undefined;
+        const contentSignals = detectContentStatus(result.content, result.status, result.finalUrl, result.title);
 
         res.json({
           content: result.content,
           pageStatusCode: result.status,
           contentType: result.contentType,
           engine: 'playwright-enhanced',
+          render_status: result.renderStatus,
+          content_status: result.contentStatus ?? contentSignals.content_status,
+          evidence: result.evidence ?? {
+            matched_signals: contentSignals.matched_signals,
+            quality: contentSignals.quality,
+          },
           ...(pageError && { pageError })
         });
       } finally {
         await page.close();
+        await persistStorageState(requestContext, url);
         await requestContext.close();
       }
     }

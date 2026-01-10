@@ -27,6 +27,7 @@ import { htmlTransform } from "./lib/removeUnwantedElements";
 import { rewriteUrl } from "./lib/rewriteUrl";
 import { AbortInstance, AbortManager } from "./lib/abortManager";
 import { ScrapeJobTimeoutError, CrawlDenialError } from "../../lib/error";
+import { evaluateGatekeeper, GatekeeperResult } from "./gatekeeper";
 
 export type ScrapeUrlResponse =
   | {
@@ -151,6 +152,7 @@ type EngineScrapeResultWithContext = {
   engine: Engine;
   unsupportedFeatures: Set<FeatureFlag>;
   result: EngineScrapeResult;
+  gatekeeper: GatekeeperResult;
 };
 
 async function scrapeURLWithFallbacks(meta: Meta): Promise<ScrapeUrlResponse> {
@@ -193,17 +195,29 @@ async function scrapeURLWithFallbacks(meta: Meta): Promise<ScrapeUrlResponse> {
           }
         }
 
-        const isLongEnough = checkMarkdown.trim().length > 0;
+        const gatekeeper = evaluateGatekeeper({
+          url: meta.url,
+          finalUrl: engineResult.url,
+          statusCode: engineResult.statusCode,
+          html: engineResult.html ?? "",
+          title: engineResult.pdfMetadata?.title ?? "",
+          mainContentChars: checkMarkdown.trim().length,
+        });
+
         const isGoodStatusCode =
           (engineResult.statusCode >= 200 && engineResult.statusCode < 300) ||
           engineResult.statusCode === 304;
-        const hasNoPageError = engineResult.error === undefined;
 
-        if (isLongEnough || !isGoodStatusCode) {
+        const usable =
+          gatekeeper.contentStatus === "usable" ||
+          (!isGoodStatusCode && gatekeeper.blockClass !== "challenge");
+
+        if (usable) {
           const wrapped: EngineScrapeResultWithContext = {
             engine,
             unsupportedFeatures,
             result: engineResult,
+            gatekeeper,
           };
           return await finalizeDocument(meta, wrapped, enginesAttempted);
         }
@@ -225,7 +239,8 @@ async function scrapeURLWithFallbacks(meta: Meta): Promise<ScrapeUrlResponse> {
           error instanceof PDFAntibotError ||
           error instanceof DocumentAntibotError ||
           error instanceof PDFInsufficientTimeError ||
-          error instanceof ProxySelectionError
+          error instanceof ProxySelectionError ||
+          error instanceof EngineUnsuccessfulError
         ) {
           lastError = error;
           continue;
@@ -263,19 +278,25 @@ async function finalizeDocument(
   let document: Document = {
     markdown: result.result.markdown,
     rawHtml: result.result.html,
-    metadata: {
-      sourceURL: meta.url,
-      url: result.result.url,
-      statusCode: result.result.statusCode,
-      error: result.result.error,
-      numPages: result.result.pdfMetadata?.numPages,
-      ...(result.result.pdfMetadata?.title
-        ? { title: result.result.pdfMetadata.title }
-        : {}),
-      contentType: result.result.contentType,
-      proxyUsed: result.result.proxyUsed ?? "basic",
-    },
-  };
+      metadata: {
+        sourceURL: meta.url,
+        url: result.result.url,
+        statusCode: result.result.statusCode,
+        error: result.result.error,
+        numPages: result.result.pdfMetadata?.numPages,
+        ...(result.result.pdfMetadata?.title
+          ? { title: result.result.pdfMetadata.title }
+          : {}),
+        contentType: result.result.contentType,
+        proxyUsed: result.result.proxyUsed ?? "basic",
+        gatekeeper: result.gatekeeper,
+        renderStatus: result.result.trace?.renderStatus ?? "loaded",
+        contentStatus:
+          result.result.trace?.contentStatus ?? result.gatekeeper.contentStatus,
+        evidence: result.result.trace?.evidence ?? result.gatekeeper.evidence,
+        headers: result.result.headers,
+      },
+    };
 
   const doc = await executeTransformers(meta, document);
   return {
