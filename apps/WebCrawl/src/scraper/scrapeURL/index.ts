@@ -157,6 +157,7 @@ type EngineScrapeResultWithContext = {
 
 async function scrapeURLWithFallbacks(meta: Meta): Promise<ScrapeUrlResponse> {
   let attempts = 0;
+  const engineRetryCount: Map<Engine, number> = new Map();
 
   while (attempts < 3) {
     attempts += 1;
@@ -166,6 +167,7 @@ async function scrapeURLWithFallbacks(meta: Meta): Promise<ScrapeUrlResponse> {
 
     for (const { engine, unsupportedFeatures } of fallbackList) {
       enginesAttempted.push(engine);
+      engineRetryCount.set(engine, engineRetryCount.get(engine) ?? 0);
       try {
         const engineResult = await scrapeURLWithEngine(meta, engine);
 
@@ -208,9 +210,35 @@ async function scrapeURLWithFallbacks(meta: Meta): Promise<ScrapeUrlResponse> {
           (engineResult.statusCode >= 200 && engineResult.statusCode < 300) ||
           engineResult.statusCode === 304;
 
+        const hasSetCookie =
+          engineResult.headers &&
+          Object.keys(engineResult.headers).some(
+            k => k.toLowerCase() === "set-cookie",
+          );
+
         const usable =
           gatekeeper.contentStatus === "usable" ||
           (!isGoodStatusCode && gatekeeper.blockClass !== "challenge");
+
+        const shouldRetrySameEngine =
+          (!usable &&
+            (engineResult.statusCode === 403 || engineResult.statusCode === 401)) ||
+          hasSetCookie;
+
+        if (
+          shouldRetrySameEngine &&
+          (engineRetryCount.get(engine) ?? 0) < 1
+        ) {
+          const nextCount = (engineRetryCount.get(engine) ?? 0) + 1;
+          engineRetryCount.set(engine, nextCount);
+          meta.logger.info("Retrying same engine due to status/set-cookie", {
+            engine,
+            statusCode: engineResult.statusCode,
+            hasSetCookie,
+            attempt: nextCount,
+          });
+          continue;
+        }
 
         if (usable) {
           const wrapped: EngineScrapeResultWithContext = {

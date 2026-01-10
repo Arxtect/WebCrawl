@@ -24,7 +24,7 @@ type GatekeeperRule = {
 
 type DomainRuleConfig = {
   rules?: GatekeeperRule[];
-  thresholds?: Partial<ContentThresholds>;
+  thresholds?: ContentThresholds;
 };
 
 type GatekeeperConfig = {
@@ -93,9 +93,10 @@ function getDomainConfig(url: string): DomainRuleConfig {
   return {
     rules: domainRules?.rules ?? cfg.global?.rules ?? [],
     thresholds: {
-      ...defaultThresholds,
-      ...(cfg.global?.thresholds ?? {}),
-      ...(domainRules?.thresholds ?? {}),
+      min_html_bytes: domainRules?.thresholds?.min_html_bytes ?? cfg.global?.thresholds?.min_html_bytes ?? defaultThresholds.min_html_bytes,
+      min_visible_text_chars: domainRules?.thresholds?.min_visible_text_chars ?? cfg.global?.thresholds?.min_visible_text_chars ?? defaultThresholds.min_visible_text_chars,
+      min_main_content_chars: domainRules?.thresholds?.min_main_content_chars ?? cfg.global?.thresholds?.min_main_content_chars ?? defaultThresholds.min_main_content_chars,
+      require_structured_data: domainRules?.thresholds?.require_structured_data ?? cfg.global?.thresholds?.require_structured_data ?? defaultThresholds.require_structured_data,
     },
   };
 }
@@ -202,10 +203,10 @@ export function evaluateGatekeeper(input: {
   if (blockClass === "none") {
     const t = domainConfig.thresholds ?? defaultThresholds;
     const thinSignals: string[] = [];
-    if (htmlBytes < t.min_html_bytes) thinSignals.push("html_bytes_lt");
-    if (visibleText.length < t.min_visible_text_chars) thinSignals.push("visible_text_len_lt");
-    if (mainChars < t.min_main_content_chars) thinSignals.push("main_content_len_lt");
-    if (t.require_structured_data && !hasStructuredData) thinSignals.push("missing_structured_data");
+    if (htmlBytes < (t.min_html_bytes ?? defaultThresholds.min_html_bytes)) thinSignals.push("html_bytes_lt");
+    if (visibleText.length < (t.min_visible_text_chars ?? defaultThresholds.min_visible_text_chars)) thinSignals.push("visible_text_len_lt");
+    if (mainChars < (t.min_main_content_chars ?? defaultThresholds.min_main_content_chars)) thinSignals.push("main_content_len_lt");
+    if ((t.require_structured_data ?? defaultThresholds.require_structured_data) && !hasStructuredData) thinSignals.push("missing_structured_data");
 
     if (thinSignals.length > 0) {
       blockClass = "thin";

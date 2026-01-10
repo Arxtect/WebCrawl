@@ -1,6 +1,7 @@
 import { Logger } from "winston";
 import { z, ZodError } from "zod";
 import { fetch, FormData, Agent } from "undici";
+import type { Response as UndiciResponse } from "undici";
 import { cacheableLookup } from "./cacheableLookup";
 import dns from "dns";
 import { AbortManagerThrownError } from "./abortManager";
@@ -26,7 +27,7 @@ const robustAgent = new Agent({
   headersTimeout: 0,
   bodyTimeout: 0,
   connect: {
-    lookup: cacheableLookup.lookup,
+    lookup: (...args: any[]) => (cacheableLookup.lookup as any)(...args),
   },
 });
 
@@ -89,11 +90,11 @@ export async function robustFetch<
 
   let response: {
     status: number;
-    headers: Headers;
+    headers: UndiciResponse["headers"];
     body: string;
   };
 
-  let request: Response;
+  let request: UndiciResponse;
   try {
     request = await fetch(url, {
       method,
