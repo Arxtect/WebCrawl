@@ -1,44 +1,154 @@
-# WebCrawl
+# WebCrawl API
 
-Lightweight, self-hosted page scraping microservice focused on high-performance extraction:
+轻量自托管抓取微服务，支持 fetch / playwright / PDF / document 引擎，输出 markdown / HTML / 链接 / 图片 / metadata。
 
-- Engines: fetch, playwright (optional microservice), PDF, document (docx/odt/rtf/xlsx)
-- Outputs: markdown, raw HTML, links, images, metadata
-
-## Run
+## 服务启动
 
 ```bash
+cd apps/WebCrawl
 bun run dev
 ```
 
-## API
+如需浏览器渲染，先启动 `apps/playwright-service-ts` 并在 `.env` 设置 `PLAYWRIGHT_MICROSERVICE_URL=http://localhost:3003/scrape` 或 `/scrape-enhanced`。
 
-`POST /scrape`
+## 1) POST /scrape
 
+单页抓取。
+
+请求体：
 ```json
 {
   "url": "https://example.com",
   "formats": [{ "type": "markdown" }, { "type": "links" }],
-  "onlyMainContent": true
+  "onlyMainContent": true,
+  "headers": { "User-Agent": "WebCrawl/1.0" },
+  "waitFor": 1000,
+  "timeout": 30000,
+  "parsers": ["pdf"],
+  "skipTlsVerification": false,
+  "removeBase64Images": true
 }
 ```
 
-## Services
+字段说明：
+- `url` (string, required)
+- `formats` (array, default `[{"type":"markdown"}]`): `markdown` | `html` | `rawHtml` | `links` | `images`
+- `onlyMainContent` (bool, default true)
+- `headers` (record<string,string>, optional)
+- `includeTags` / `excludeTags` (string[], optional)
+- `timeout` (ms, optional)
+- `waitFor` (ms, default 0)
+- `parsers` (optional): `["pdf"]` 或 `{ "type": "pdf", "maxPages": 100 }`
+- `skipTlsVerification` (bool, optional)
+- `removeBase64Images` (bool, default true)
 
-- Playwright microservice (optional): set `PLAYWRIGHT_MICROSERVICE_URL`
-- Markdown conversion uses built-in Turndown.
+成功响应：
+```json
+{
+  "success": true,
+  "document": {
+    "markdown": "...",
+    "links": ["https://..."],
+    "rawHtml": "<html>...</html>",
+    "metadata": {
+      "sourceURL": "https://example.com",
+      "url": "https://example.com",
+      "statusCode": 200,
+      "contentType": "text/html",
+      "proxyUsed": "basic",
+      "renderStatus": "loaded",
+      "contentStatus": "usable",
+      "gatekeeper": {
+        "blockClass": "none",
+        "confidence": 0,
+        "quality": {
+          "htmlBytes": 12345,
+          "visibleTextChars": 4567,
+          "mainContentChars": 4567
+        }
+      }
+    }
+  }
+}
+```
 
-## Deployment config
+失败响应：
+```json
+{ "success": false, "error": { "name": "...", "message": "..." } }
+```
 
-See `.env.example` for the full list. Common settings:
+## 2) POST /crawl
 
-- `HOST` and `PORT`: bind address and port for the API server.
-- `LOGGING_LEVEL`: log verbosity for the winston logger.
-- `PLAYWRIGHT_MICROSERVICE_URL`: enable dynamic rendering for JS-heavy pages.
-- `PROXY_SERVER`, `PROXY_USERNAME`, `PROXY_PASSWORD`: outbound proxy for fetch/playwright.
-- `EXPOSE_ERROR_DETAILS`, `EXPOSE_ERROR_STACK`: return verbose errors (avoid in prod).
-- `FIRECRAWL_DEBUG_FILTER_LINKS`: verbose link filter logs when crawling.
+站点爬取，内部批量调用 `/scrape`。
 
-## Native
+请求体：
+```json
+{
+  "url": "https://example.com",
+  "limit": 20,
+  "maxDepth": 1,
+  "includes": ["example.com/docs"],
+  "excludes": ["logout"],
+  "allowSubdomains": false,
+  "allowExternalContentLinks": false,
+  "headers": { "User-Agent": "WebCrawl/1.0" },
+  "scrapeOptions": {
+    "formats": [{ "type": "markdown" }, { "type": "links" }],
+    "onlyMainContent": true
+  }
+}
+```
 
-`@mendable/firecrawl-rs` is used as a local dependency in `packages/firecrawl-rs`.
+字段说明：
+- `url` (string, required)
+- `limit` (int, default 100)
+- `maxDepth` (int, default 2)
+- `includes` / `excludes` (string[], optional)
+- `allowBackwardCrawling` (bool, default false)
+- `allowExternalContentLinks` (bool, default false)
+- `allowSubdomains` (bool, default false)
+- `regexOnFullURL` (bool, default false)
+- `headers` (record, optional)
+- `scrapeOptions`：同 `/scrape` 请求体
+
+成功响应：
+```json
+{
+  "success": true,
+  "pages": [ { "markdown": "...", "metadata": { "url": "https://..." } } ],
+  "errors": [ { "url": "...", "error": "..." } ],
+  "stats": { "discovered": 20, "processed": 20, "succeeded": 18, "failed": 2 }
+}
+```
+
+## 3) 健康检查
+
+`GET /health` → `{ "ok": true }`
+
+## 4) 引擎与重试行为
+
+- 引擎优先级：document/pdf → playwright（如果配置）→ fetch。
+- 当 playwright/fetch 收到 401/403 或响应含 `Set-Cookie` 时，同引擎自动重试最多 2 次后再回退。
+- Gatekeeper 输出 `contentStatus`（usable/thin/challenge/login/soft_block），写入 metadata。
+
+## 配置要点
+
+- `PLAYWRIGHT_MICROSERVICE_URL`: 指向浏览器微服务 `/scrape` 或 `/scrape-enhanced`。
+- `GATEKEEPER_RULES_PATH`: 规则文件，参考 `apps/WebCrawl/gatekeeper.rules.json.example`。
+- `MIN_HTML_BYTES` / `MIN_VISIBLE_TEXT_CHARS` / `MIN_MAIN_CONTENT_CHARS`: 内容判定阈值。
+- 其他见 `apps/WebCrawl/.env.example`。
+
+## Playwright 微服务接口（引用）
+
+默认入口 `/scrape` 或 `/scrape-enhanced`：
+```json
+{
+  "url": "https://example.com",
+  "wait_after_load": 0,
+  "timeout": 15000,
+  "headers": { "User-Agent": "..." },
+  "skip_tls_verification": false,
+  "use_stealth": true
+}
+```
+返回字段：`content`, `pageStatusCode`, `contentType`, `render_status`, `content_status`, `evidence`.
