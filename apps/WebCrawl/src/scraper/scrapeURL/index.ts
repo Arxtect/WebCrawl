@@ -227,7 +227,7 @@ async function scrapeURLWithFallbacks(meta: Meta): Promise<ScrapeUrlResponse> {
 
         if (
           shouldRetrySameEngine &&
-          (engineRetryCount.get(engine) ?? 0) < 1
+          (engineRetryCount.get(engine) ?? 0) < 2
         ) {
           const nextCount = (engineRetryCount.get(engine) ?? 0) + 1;
           engineRetryCount.set(engine, nextCount);
