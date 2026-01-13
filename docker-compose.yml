@@ -14,8 +14,8 @@ services:
 
   playwright-service:
     build:
-      context: ./apps/playwright-service-ts
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/playwright-service-ts/Dockerfile
       args:
         PORT: 3003
     environment:
